@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 struct Page<const SIZE: usize> {
     data: [u8; SIZE],
     transaction_ids: [Option<NonZeroU32>; SIZE],
@@ -13,17 +14,21 @@ impl<const SIZE: usize> Page<SIZE> {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 struct Transaction {
-    address: usize,
+    addr: usize,
     data: Vec<u8>,
     old_data: Vec<u8>,
     old_ids: Vec<Option<NonZeroU32>>,
+    code_location: usize,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Memory<const NUM_PAGES: usize, const PAGE_SIZE: usize> {
     default_value: u8,
     memory: [Option<Box<Page<PAGE_SIZE>>>; NUM_PAGES],
     transactions: Vec<Transaction>,
+    transaction_idx: usize,
 }
 
 impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory<NUM_PAGES, PAGE_SIZE> {
@@ -37,10 +42,11 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory<NUM_PAGES, PAGE_SIZE
             default_value,
             memory: std::array::from_fn(|_| None),
             transactions: Vec::new(),
+            transaction_idx: 0,
         }
     }
 
-    fn get_page_data(
+    fn read_page_data(
         &self,
         idx: usize,
         in_page_start_addr: usize,
@@ -65,15 +71,15 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory<NUM_PAGES, PAGE_SIZE
         let in_page_start_addr = start_addr & in_page_addr_mask;
         let in_page_end_addr = end_addr & in_page_addr_mask;
 
-        let mut data = Vec::new();
+        let mut data;
         if start_page_addr == end_page_addr {
-            data = self.get_page_data(start_page_addr, in_page_start_addr, in_page_end_addr);
+            data = self.read_page_data(start_page_addr, in_page_start_addr, in_page_end_addr);
         } else {
-            data = self.get_page_data(start_page_addr, in_page_start_addr, PAGE_SIZE-1);
+            data = self.read_page_data(start_page_addr, in_page_start_addr, PAGE_SIZE - 1);
             for page_idx in start_page_addr + 1..end_page_addr {
-                data.extend(self.get_page_data(page_idx, 0, PAGE_SIZE-1));
+                data.extend(self.read_page_data(page_idx, 0, PAGE_SIZE - 1));
             }
-            data.extend(self.get_page_data(end_page_addr, 0, in_page_end_addr));
+            data.extend(self.read_page_data(end_page_addr, 0, in_page_end_addr));
         }
         data
     }
@@ -120,6 +126,7 @@ mod tests {
             default_value,
             memory,
             transactions: Vec::new(),
+            transaction_idx: 0,
         }
     }
 
@@ -148,6 +155,9 @@ mod tests {
 
         let data = memory.read(0x1, 3);
         assert_eq!(data, vec![1, 2, 3]);
+
+        let data = memory.read(0x2, 3);
+        assert_eq!(data, vec![2, 3, 4]);
 
         let data = memory.read(0x2, 5);
         assert_eq!(data, vec![2, 3, 4, 5, 6]);
