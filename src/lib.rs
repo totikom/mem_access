@@ -131,6 +131,7 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory<NUM_PAGES, PAGE_SIZE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     fn setup_test_memory<const NUM_PAGES: usize, const PAGE_SIZE: usize>(
         default_value: u8,
