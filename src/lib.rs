@@ -83,6 +83,49 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory<NUM_PAGES, PAGE_SIZE
         }
         data
     }
+
+    fn write_page_data(&mut self, idx: usize, in_page_start_addr: usize, data: &[u8]) {
+        if let Some(page_data) = self.memory[idx].as_mut().map(|page| &mut page.data) {
+            for (index, value) in data.iter().enumerate() {
+                page_data[in_page_start_addr + index] = *value;
+            }
+        } else {
+            let mut new_page = Page::new(self.default_value);
+            for (index, value) in data.iter().enumerate() {
+                new_page.data[in_page_start_addr + index] = *value;
+            }
+            self.memory[idx] = Some(Box::new(new_page));
+        }
+    }
+
+    fn write_data(&mut self, addr: usize, data: &[u8]) {
+        let size = data.len();
+        assert!(size > 0);
+        let in_page_addr_mask = (1 << (PAGE_SIZE.ilog2())) - 1;
+        let page_addr_shift = PAGE_SIZE.ilog2();
+
+        let start_addr = addr;
+        let end_addr = addr + size - 1;
+        let start_page_addr = start_addr >> page_addr_shift;
+        let end_page_addr = end_addr >> page_addr_shift;
+        let in_page_start_addr = start_addr & in_page_addr_mask;
+
+        if start_page_addr == end_page_addr {
+            self.write_page_data(start_page_addr, in_page_start_addr, &data);
+        } else {
+            self.write_page_data(
+                start_page_addr,
+                in_page_start_addr,
+                &data[0..PAGE_SIZE - in_page_start_addr],
+            );
+            let mut offset = PAGE_SIZE - in_page_start_addr;
+            for page_idx in start_page_addr + 1..end_page_addr {
+                self.write_page_data(page_idx, 0, &data[offset..offset + PAGE_SIZE]);
+                offset += PAGE_SIZE;
+            }
+            self.write_page_data(end_page_addr, 0, &data[offset..]);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -167,5 +210,39 @@ mod tests {
 
         let data = memory.read(0x7, 6);
         assert_eq!(data, vec![7, 0xab, 0xab, 0xab, 0xab, 8]);
+    }
+
+    #[test]
+    fn write_in_page() {
+        let mut memory = Memory::<4, 4>::new(0xab);
+        let data = memory.read(0x0, 3);
+        assert_eq!(data, vec![0xab, 0xab, 0xab]);
+        let _ = memory.write_data(0x0, &vec![0, 1, 2]);
+
+        let data = memory.read(0x0, 3);
+        assert_eq!(data, vec![0, 1, 2]);
+        let data = memory.read(0x0, 4);
+        assert_eq!(data, vec![0, 1, 2, 0xab]);
+
+        let _ = memory.write_data(0x1, &vec![0, 1, 2]);
+
+        let data = memory.read(0x0, 4);
+        assert_eq!(data, vec![0, 0, 1, 2]);
+    }
+
+    #[test]
+    fn write_several_pages() {
+        let mut memory = Memory::<4, 4>::new(0xab);
+        let data = memory.read(0x0, 3);
+        assert_eq!(data, vec![0xab, 0xab, 0xab]);
+        let _ = memory.write_data(0x2, &vec![0, 1, 2]);
+
+        let data = memory.read(0x0, 8);
+        assert_eq!(data, vec![0xab, 0xab, 0, 1, 2, 0xab, 0xab, 0xab]);
+
+        let _ = memory.write_data(0x3, &vec![0, 1, 2, 3, 4, 5, 6, 7]);
+
+        let data = memory.read(0x0, 12);
+        assert_eq!(data, vec![0xab, 0xab, 0, 0, 1, 2, 3, 4, 5, 6, 7, 0xab]);
     }
 }
