@@ -59,6 +59,19 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory<NUM_PAGES, PAGE_SIZE
         }
     }
 
+    fn read_page_transaction_ids(
+        &self,
+        idx: usize,
+        in_page_start_addr: usize,
+        in_page_end_addr: usize,
+    ) -> Vec<Option<NonZeroU32>> {
+        if let Some(page_data) = self.memory[idx].as_ref().map(|page| &page.transaction_ids) {
+            page_data[in_page_start_addr..=in_page_end_addr].to_vec()
+        } else {
+            vec![NonZeroU32::new(0); in_page_end_addr + 1 - in_page_start_addr]
+        }
+    }
+
     pub fn read(&self, addr: usize, size: usize) -> Vec<u8> {
         assert!(size > 0);
         let in_page_addr_mask = (1 << (PAGE_SIZE.ilog2())) - 1;
@@ -84,6 +97,39 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory<NUM_PAGES, PAGE_SIZE
         data
     }
 
+    fn read_transaction_ids(&self, addr: usize, size: usize) -> Vec<Option<NonZeroU32>> {
+        let in_page_addr_mask = 1 << (PAGE_SIZE.ilog2() + 1) - 1;
+        let page_addr_shift = PAGE_SIZE.ilog2();
+
+        let start_addr = addr;
+        let end_addr = addr + size;
+        let start_page_addr = start_addr >> page_addr_shift;
+        let end_page_addr = end_addr >> page_addr_shift;
+        let in_page_start_addr = start_addr & in_page_addr_mask;
+        let in_page_end_addr = start_addr & in_page_addr_mask;
+
+        let mut transaction_ids;
+        if start_page_addr == end_page_addr {
+            transaction_ids = self.read_page_transaction_ids(
+                start_page_addr,
+                in_page_start_addr,
+                in_page_end_addr,
+            );
+        } else {
+            transaction_ids =
+                self.read_page_transaction_ids(start_page_addr, in_page_start_addr, PAGE_SIZE - 1);
+            for page_idx in start_page_addr + 1..end_page_addr {
+                transaction_ids.extend(self.read_page_transaction_ids(page_idx, 0, PAGE_SIZE - 1));
+            }
+            transaction_ids.extend(self.read_page_transaction_ids(
+                end_page_addr,
+                0,
+                in_page_end_addr,
+            ));
+        }
+        transaction_ids
+    }
+
     fn write_page_data(&mut self, idx: usize, in_page_start_addr: usize, data: &[u8]) {
         if let Some(page_data) = self.memory[idx].as_mut().map(|page| &mut page.data) {
             for (index, value) in data.iter().enumerate() {
@@ -95,6 +141,24 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory<NUM_PAGES, PAGE_SIZE
                 new_page.data[in_page_start_addr + index] = *value;
             }
             self.memory[idx] = Some(Box::new(new_page));
+        }
+    }
+
+    fn write_page_transaction_ids(
+        &mut self,
+        idx: usize,
+        in_page_start_addr: usize,
+        transaction_ids: &[Option<NonZeroU32>],
+    ) {
+        if let Some(page_transaction_ids) = self.memory[idx]
+            .as_mut()
+            .map(|page| &mut page.transaction_ids)
+        {
+            for (index, value) in transaction_ids.iter().enumerate() {
+                page_transaction_ids[in_page_start_addr + index] = *value;
+            }
+        } else {
+            unreachable!("Page should have been already created!");
         }
     }
 
@@ -125,6 +189,65 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory<NUM_PAGES, PAGE_SIZE
             }
             self.write_page_data(end_page_addr, 0, &data[offset..]);
         }
+    }
+
+    fn write_transaction_ids(&mut self, addr: usize, transaction_ids: &[Option<NonZeroU32>]) {
+        let size = transaction_ids.len();
+        assert!(size > 0);
+        let in_page_addr_mask = (1 << (PAGE_SIZE.ilog2())) - 1;
+        let page_addr_shift = PAGE_SIZE.ilog2();
+
+        let start_addr = addr;
+        let end_addr = addr + size - 1;
+        let start_page_addr = start_addr >> page_addr_shift;
+        let end_page_addr = end_addr >> page_addr_shift;
+        let in_page_start_addr = start_addr & in_page_addr_mask;
+
+        if start_page_addr == end_page_addr {
+            self.write_page_transaction_ids(start_page_addr, in_page_start_addr, &transaction_ids);
+        } else {
+            self.write_page_transaction_ids(
+                start_page_addr,
+                in_page_start_addr,
+                &transaction_ids[0..PAGE_SIZE - in_page_start_addr],
+            );
+            let mut offset = PAGE_SIZE - in_page_start_addr;
+            for page_idx in start_page_addr + 1..end_page_addr {
+                self.write_page_transaction_ids(
+                    page_idx,
+                    0,
+                    &transaction_ids[offset..offset + PAGE_SIZE],
+                );
+                offset += PAGE_SIZE;
+            }
+            self.write_page_transaction_ids(end_page_addr, 0, &transaction_ids[offset..]);
+        }
+    }
+
+    pub fn add_transaction(
+        &mut self,
+        addr: usize,
+        data: Vec<u8>,
+        code_location: usize,
+    ) -> Result<(), ()> {
+        if self.transactions.len() != self.transaction_idx {
+            return Err(());
+        }
+        let old_data = self.read(addr, data.len());
+        let old_ids = self.read_transaction_ids(addr, data.len());
+        let transaction_idx = NonZeroU32::new((self.transaction_idx + 1) as u32);
+        self.write_data(addr, &data);
+        self.write_transaction_ids(addr, &vec![transaction_idx; data.len()]);
+        let transaction = Transaction {
+            addr,
+            data: data.clone(),
+            old_ids,
+            old_data,
+            code_location,
+        };
+        self.transactions.push(transaction);
+        self.transaction_idx = self.transaction_idx + 1;
+        Ok(())
     }
 }
 
