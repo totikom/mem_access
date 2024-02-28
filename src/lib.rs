@@ -256,6 +256,83 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    struct NaiveMemory<const NUM_PAGES: usize, const PAGE_SIZE: usize, const SIZE: usize> {
+        default_value: u8,
+        data: Box<[u8; SIZE]>,
+        transaction_ids: Box<[Option<NonZeroU32>; SIZE]>,
+        transactions: Vec<Transaction>,
+        transaction_idx: usize,
+    }
+
+    impl<const NUM_PAGES: usize, const PAGE_SIZE: usize, const SIZE: usize>
+        NaiveMemory<NUM_PAGES, PAGE_SIZE, SIZE>
+    {
+        const COMPTIME_SIZE_CHECK_PAGE: () = assert!(2_usize.pow(PAGE_SIZE.ilog2()) == PAGE_SIZE);
+        const COMPTIME_SIZE_CHECK_SPACE: () = assert!(2_usize.pow(NUM_PAGES.ilog2()) == NUM_PAGES);
+        const COMPTIME_SIZE_CHECK_SIZE: () = assert!(NUM_PAGES * PAGE_SIZE == SIZE);
+
+        pub fn new(default_value: u8) -> Self {
+            let _: () = Self::COMPTIME_SIZE_CHECK_PAGE;
+            let _: () = Self::COMPTIME_SIZE_CHECK_SPACE;
+            let _: () = Self::COMPTIME_SIZE_CHECK_SIZE;
+            Self {
+                default_value,
+                data: Box::new([default_value; SIZE]),
+                transaction_ids: Box::new(std::array::from_fn(|_| None)),
+                transaction_idx: 0,
+                transactions: Vec::new(),
+            }
+        }
+
+        pub fn read(&self, addr: usize, size: usize) -> Vec<u8> {
+            assert!(size > 0);
+            self.data[addr..addr + size].to_vec()
+        }
+
+        fn read_transaction_ids(&self, addr: usize, size: usize) -> Vec<Option<NonZeroU32>> {
+            assert!(size > 0);
+            self.transaction_ids[addr..addr + size].to_vec()
+        }
+
+        fn write_data(&mut self, addr: usize, data: &[u8]) {
+            for (mem_cell, value) in self.data[addr..].iter_mut().zip(data.iter()) {
+                *mem_cell = *value;
+            }
+        }
+
+        fn write_transaction_ids(&mut self, addr: usize, transaction_ids: &[Option<NonZeroU32>]) {
+            for (id_cell, value) in self.transaction_ids[addr..].iter_mut().zip(transaction_ids.iter()) {
+                *id_cell = *value;
+            }
+        }
+
+        pub fn add_transaction(
+            &mut self,
+            addr: usize,
+            data: Vec<u8>,
+            code_location: usize,
+        ) -> Result<(), ()> {
+            if self.transactions.len() != self.transaction_idx {
+                return Err(());
+            }
+            let old_data = self.read(addr, data.len());
+            let old_ids = self.read_transaction_ids(addr, data.len());
+            let transaction_idx = NonZeroU32::new((self.transaction_idx + 1) as u32);
+            self.write_data(addr, &data);
+            self.write_transaction_ids(addr, &vec![transaction_idx; data.len()]);
+            let transaction = Transaction {
+                addr,
+                data: data.clone(),
+                old_ids,
+                old_data,
+                code_location,
+            };
+            self.transactions.push(transaction);
+            self.transaction_idx = self.transaction_idx + 1;
+            Ok(())
+        }
+    }
+
     fn setup_test_memory<const NUM_PAGES: usize, const PAGE_SIZE: usize>(
         default_value: u8,
     ) -> Memory<NUM_PAGES, PAGE_SIZE> {
@@ -338,7 +415,7 @@ mod tests {
 
     #[test]
     fn write_in_page() {
-        let mut memory = Memory::<4, 4>::new(0xab);
+        let mut memory = NaiveMemory::<4, 4, 16>::new(0xab);
         let data = memory.read(0x0, 3);
         assert_eq!(data, vec![0xab, 0xab, 0xab]);
         let _ = memory.write_data(0x0, &vec![0, 1, 2]);
@@ -356,7 +433,7 @@ mod tests {
 
     #[test]
     fn write_several_pages() {
-        let mut memory = Memory::<4, 4>::new(0xab);
+        let mut memory = NaiveMemory::<4, 4, 16>::new(0xab);
         let data = memory.read(0x0, 3);
         assert_eq!(data, vec![0xab, 0xab, 0xab]);
         let _ = memory.write_data(0x2, &vec![0, 1, 2]);
