@@ -14,7 +14,7 @@ impl<const SIZE: usize> Page<SIZE> {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Default, Clone, Eq, PartialEq, Ord, PartialOrd)]
 struct Transaction {
     addr: usize,
     data: Vec<u8>,
@@ -225,6 +225,22 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory<NUM_PAGES, PAGE_SIZE
         }
     }
 
+    fn next_transaction(&mut self) -> Option<()> {
+        let Some(original_transaction) = self.transactions.get_mut(self.transaction_idx) else {
+            return None;
+        };
+        let transaction_idx = NonZeroU32::new((self.transaction_idx + 1) as u32);
+        let transaction = std::mem::take(original_transaction);
+        self.write_data(transaction.addr, &transaction.data);
+        self.write_transaction_ids(
+            transaction.addr,
+            &vec![transaction_idx; transaction.data.len()],
+        );
+        let _ = std::mem::replace(&mut self.transactions[self.transaction_idx], transaction);
+        self.transaction_idx = self.transaction_idx + 1;
+        Some(())
+    }
+
     pub fn add_transaction(
         &mut self,
         addr: usize,
@@ -236,19 +252,21 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory<NUM_PAGES, PAGE_SIZE
         }
         let old_data = self.read(addr, data.len());
         let old_ids = self.read_transaction_ids(addr, data.len());
-        let transaction_idx = NonZeroU32::new((self.transaction_idx + 1) as u32);
-        self.write_data(addr, &data);
-        self.write_transaction_ids(addr, &vec![transaction_idx; data.len()]);
         let transaction = Transaction {
             addr,
-            data: data.clone(),
+            data,
             old_ids,
             old_data,
             code_location,
         };
         self.transactions.push(transaction);
-        self.transaction_idx = self.transaction_idx + 1;
+        let result = self.next_transaction();
+        debug_assert!(result.is_some());
         Ok(())
+    }
+
+    pub fn current_transaction_id(&self) -> usize {
+        self.transaction_idx
     }
 }
 
