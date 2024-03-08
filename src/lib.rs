@@ -98,15 +98,16 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory<NUM_PAGES, PAGE_SIZE
     }
 
     fn read_transaction_ids(&self, addr: usize, size: usize) -> Vec<Option<NonZeroU32>> {
-        let in_page_addr_mask = 1 << (PAGE_SIZE.ilog2() + 1) - 1;
+        assert!(size > 0);
+        let in_page_addr_mask = (1 << (PAGE_SIZE.ilog2())) - 1;
         let page_addr_shift = PAGE_SIZE.ilog2();
 
         let start_addr = addr;
-        let end_addr = addr + size;
+        let end_addr = addr + size - 1;
         let start_page_addr = start_addr >> page_addr_shift;
         let end_page_addr = end_addr >> page_addr_shift;
         let in_page_start_addr = start_addr & in_page_addr_mask;
-        let in_page_end_addr = start_addr & in_page_addr_mask;
+        let in_page_end_addr = end_addr & in_page_addr_mask;
 
         let mut transaction_ids;
         if start_page_addr == end_page_addr {
@@ -415,17 +416,17 @@ mod tests {
 
     #[test]
     fn write_in_page() {
-        let mut memory = NaiveMemory::<4, 4, 16>::new(0xab);
+        let mut memory = Memory::<4, 4>::new(0xab);
         let data = memory.read(0x0, 3);
         assert_eq!(data, vec![0xab, 0xab, 0xab]);
-        let _ = memory.write_data(0x0, &vec![0, 1, 2]);
+        memory.write_data(0x0, &vec![0, 1, 2]);
 
         let data = memory.read(0x0, 3);
         assert_eq!(data, vec![0, 1, 2]);
         let data = memory.read(0x0, 4);
         assert_eq!(data, vec![0, 1, 2, 0xab]);
 
-        let _ = memory.write_data(0x1, &vec![0, 1, 2]);
+        memory.write_data(0x1, &vec![0, 1, 2]);
 
         let data = memory.read(0x0, 4);
         assert_eq!(data, vec![0, 0, 1, 2]);
@@ -433,17 +434,98 @@ mod tests {
 
     #[test]
     fn write_several_pages() {
-        let mut memory = NaiveMemory::<4, 4, 16>::new(0xab);
+        let mut memory = Memory::<4, 4>::new(0xab);
         let data = memory.read(0x0, 3);
         assert_eq!(data, vec![0xab, 0xab, 0xab]);
-        let _ = memory.write_data(0x2, &vec![0, 1, 2]);
+        memory.write_data(0x2, &vec![0, 1, 2]);
 
         let data = memory.read(0x0, 8);
         assert_eq!(data, vec![0xab, 0xab, 0, 1, 2, 0xab, 0xab, 0xab]);
 
-        let _ = memory.write_data(0x3, &vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        memory.write_data(0x3, &vec![0, 1, 2, 3, 4, 5, 6, 7]);
 
         let data = memory.read(0x0, 12);
         assert_eq!(data, vec![0xab, 0xab, 0, 0, 1, 2, 3, 4, 5, 6, 7, 0xab]);
+    }
+
+    #[test]
+    fn write_ids_in_page() {
+        let mut memory = Memory::<4, 4>::new(0xab);
+        let transaction_ids = memory.read_transaction_ids(0x0, 3);
+        assert_eq!(transaction_ids, vec![None, None, None]);
+
+        let expected_ids = vec![NonZeroU32::new(0), NonZeroU32::new(1), NonZeroU32::new(2)];
+        memory.write_data(0x0, &vec![0, 1, 2]);
+        memory.write_transaction_ids(0x0, &expected_ids);
+        let transaction_ids = memory.read_transaction_ids(0x0, 3);
+        assert_eq!(transaction_ids, expected_ids);
+
+        let expected_ids = vec![
+            NonZeroU32::new(0),
+            NonZeroU32::new(1),
+            NonZeroU32::new(2),
+            NonZeroU32::new(0),
+        ];
+        let transaction_ids = memory.read_transaction_ids(0x0, 4);
+        assert_eq!(transaction_ids, expected_ids);
+
+        let expected_ids = vec![NonZeroU32::new(0), NonZeroU32::new(1), NonZeroU32::new(2)];
+        memory.write_transaction_ids(0x1, &expected_ids);
+
+        let expected_ids = vec![
+            NonZeroU32::new(0),
+            NonZeroU32::new(0),
+            NonZeroU32::new(1),
+            NonZeroU32::new(2),
+        ];
+        let transaction_ids = memory.read_transaction_ids(0x0, 4);
+        assert_eq!(transaction_ids, expected_ids);
+    }
+
+    #[test]
+    fn write_ids_several_pages() {
+        let mut memory = Memory::<4, 4>::new(0xab);
+        memory.write_data(0x2, &vec![0, 1, 2]);
+        memory.write_transaction_ids(
+            0x2,
+            &vec![NonZeroU32::new(1); 3],
+        );
+
+        let data = memory.read_transaction_ids(0x0, 8);
+        assert_eq!(
+            data,
+            vec![
+                NonZeroU32::new(0),
+                NonZeroU32::new(0),
+                NonZeroU32::new(1),
+                NonZeroU32::new(1),
+                NonZeroU32::new(1),
+                NonZeroU32::new(0),
+                NonZeroU32::new(0),
+                NonZeroU32::new(0)
+            ]
+        );
+
+        memory.write_data(0x3, &vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        memory.write_transaction_ids(0x3, &vec![NonZeroU32::new(2); 8]);
+
+        let data = memory.read_transaction_ids(0x0, 12);
+        assert_eq!(
+            data,
+            vec![
+                NonZeroU32::new(0),
+                NonZeroU32::new(0),
+                NonZeroU32::new(1),
+                NonZeroU32::new(2),
+                NonZeroU32::new(2),
+                NonZeroU32::new(2),
+                NonZeroU32::new(2),
+                NonZeroU32::new(2),
+                NonZeroU32::new(2),
+                NonZeroU32::new(2),
+                NonZeroU32::new(2),
+                NonZeroU32::new(0)
+            ]
+        );
     }
 }
