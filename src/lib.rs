@@ -24,14 +24,14 @@ struct Transaction {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub struct Memory<const NUM_PAGES: usize, const PAGE_SIZE: usize> {
+pub struct PagedMemory<const NUM_PAGES: usize, const PAGE_SIZE: usize> {
     default_value: u8,
     memory: [Option<Box<Page<PAGE_SIZE>>>; NUM_PAGES],
     transactions: Vec<Transaction>,
     transaction_idx: usize,
 }
 
-impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory<NUM_PAGES, PAGE_SIZE> {
+impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> PagedMemory<NUM_PAGES, PAGE_SIZE> {
     const COMPTIME_SIZE_CHECK_PAGE: () = assert!(2_usize.pow(PAGE_SIZE.ilog2()) == PAGE_SIZE);
     const COMPTIME_SIZE_CHECK_SPACE: () = assert!(2_usize.pow(NUM_PAGES.ilog2()) == NUM_PAGES);
 
@@ -413,7 +413,7 @@ mod tests {
 
     fn setup_test_memory<const NUM_PAGES: usize, const PAGE_SIZE: usize>(
         default_value: u8,
-    ) -> Memory<NUM_PAGES, PAGE_SIZE> {
+    ) -> PagedMemory<NUM_PAGES, PAGE_SIZE> {
         let continuously_filled_pages = NUM_PAGES / 2;
         let mut memory = std::array::from_fn(|_| None);
 
@@ -444,7 +444,7 @@ mod tests {
             });
             memory[i] = Some(page);
         }
-        Memory {
+        PagedMemory {
             default_value,
             memory,
             transactions: Vec::new(),
@@ -454,14 +454,14 @@ mod tests {
 
     #[test]
     fn empty_table_single_byte() {
-        let memory = Memory::<8, 4>::new(0xab);
+        let memory = PagedMemory::<8, 4>::new(0xab);
         let data = memory.read(0x2, 1);
         assert_eq!(data, vec![0xab]);
     }
 
     #[test]
     fn empty_table_page_border() {
-        let memory = Memory::<8, 4>::new(0xab);
+        let memory = PagedMemory::<8, 4>::new(0xab);
         let data = memory.read(0x0, 2);
         assert_eq!(data, vec![0xab, 0xab]);
 
@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn write_in_page() {
-        let mut memory = Memory::<4, 4>::new(0xab);
+        let mut memory = PagedMemory::<4, 4>::new(0xab);
         let data = memory.read(0x0, 3);
         assert_eq!(data, vec![0xab, 0xab, 0xab]);
         memory.write_data(0x0, &vec![0, 1, 2]);
@@ -511,7 +511,7 @@ mod tests {
 
     #[test]
     fn write_several_pages() {
-        let mut memory = Memory::<4, 4>::new(0xab);
+        let mut memory = PagedMemory::<4, 4>::new(0xab);
         let data = memory.read(0x0, 3);
         assert_eq!(data, vec![0xab, 0xab, 0xab]);
         memory.write_data(0x2, &vec![0, 1, 2]);
@@ -527,7 +527,7 @@ mod tests {
 
     #[test]
     fn write_ids_in_page() {
-        let mut memory = Memory::<4, 4>::new(0xab);
+        let mut memory = PagedMemory::<4, 4>::new(0xab);
         let transaction_ids = memory.read_transaction_ids(0x0, 3);
         assert_eq!(transaction_ids, vec![None, None, None]);
 
@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn write_ids_several_pages() {
-        let mut memory = Memory::<4, 4>::new(0xab);
+        let mut memory = PagedMemory::<4, 4>::new(0xab);
         memory.write_data(0x2, &vec![0, 1, 2]);
         memory.write_transaction_ids(
             0x2,
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn apply_transaction() {
-        let mut memory = Memory::<4, 4>::new(0xab);
+        let mut memory = PagedMemory::<4, 4>::new(0xab);
         let data1 = vec![0, 1, 2, 3, 4];
         memory.add_transaction(0x1, data1.clone(), 0x0).unwrap();
         assert_eq!(memory.read(0x1, data1.len()), data1);
@@ -635,7 +635,7 @@ mod tests {
 
     #[test]
     fn revert_transaction() {
-        let mut memory = Memory::<4, 4>::new(0xab);
+        let mut memory = PagedMemory::<4, 4>::new(0xab);
         let data1 = vec![0, 1, 2, 3, 4];
         memory.add_transaction(0x1, data1.clone(), 0x0).unwrap();
         assert_eq!(memory.read(0x1, data1.len()), data1);
