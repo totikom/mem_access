@@ -241,6 +241,24 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory<NUM_PAGES, PAGE_SIZE
         Some(())
     }
 
+    fn previous_transaction(&mut self) -> Option<()> {
+        if self.transaction_idx == 0 {
+            return None;
+        }
+        let Some(original_transaction) = self.transactions.get_mut(self.transaction_idx - 1) else {
+            return None;
+        };
+        let transaction = std::mem::take(original_transaction);
+        self.write_data(transaction.addr, &transaction.old_data);
+        self.write_transaction_ids(
+            transaction.addr,
+            &transaction.old_ids,
+        );
+        let _ = std::mem::replace(&mut self.transactions[self.transaction_idx - 1], transaction);
+        self.transaction_idx = self.transaction_idx - 1;
+        Some(())
+    }
+
     pub fn add_transaction(
         &mut self,
         addr: usize,
@@ -338,6 +356,24 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize, const SIZE: usize>
         );
         let _ = std::mem::replace(&mut self.transactions[self.transaction_idx], transaction);
         self.transaction_idx = self.transaction_idx + 1;
+        Some(())
+    }
+
+    fn previous_transaction(&mut self) -> Option<()> {
+        if self.transaction_idx == 0 {
+            return None;
+        }
+        let Some(original_transaction) = self.transactions.get_mut(self.transaction_idx - 1) else {
+            return None;
+        };
+        let transaction = std::mem::take(original_transaction);
+        self.write_data(transaction.addr, &transaction.old_data);
+        self.write_transaction_ids(
+            transaction.addr,
+            &transaction.old_ids,
+        );
+        let _ = std::mem::replace(&mut self.transactions[self.transaction_idx], transaction);
+        self.transaction_idx = self.transaction_idx - 1;
         Some(())
     }
 
@@ -592,6 +628,55 @@ mod tests {
             NonZeroU32::new(2),
             NonZeroU32::new(2),
             NonZeroU32::new(2),
+            NonZeroU32::new(0),
+        ];
+        assert_eq!(result_tr, expected_result_tr);
+    }
+
+    #[test]
+    fn revert_transaction() {
+        let mut memory = Memory::<4, 4>::new(0xab);
+        let data1 = vec![0, 1, 2, 3, 4];
+        memory.add_transaction(0x1, data1.clone(), 0x0).unwrap();
+        assert_eq!(memory.read(0x1, data1.len()), data1);
+
+        let data2 = vec![4, 3, 2, 1];
+        memory.add_transaction(0x3, data2.clone(), 0x0).unwrap();
+
+        assert!(memory.previous_transaction().is_some());
+
+        let result = memory.read(0x0, 8);
+        let expected_result = vec![0xab, 0, 1, 2, 3, 4, 0xab, 0xab];
+        assert_eq!(result, expected_result);
+        let result_tr = memory.read_transaction_ids(0x0, 8);
+        assert_eq!(result_tr.len(), 8);
+        let expected_result_tr = vec![
+            NonZeroU32::new(0),
+            NonZeroU32::new(1),
+            NonZeroU32::new(1),
+            NonZeroU32::new(1),
+            NonZeroU32::new(1),
+            NonZeroU32::new(1),
+            NonZeroU32::new(0),
+            NonZeroU32::new(0),
+        ];
+        assert_eq!(result_tr, expected_result_tr);
+
+        assert!(memory.previous_transaction().is_some());
+
+        let result = memory.read(0x0, 8);
+        let expected_result = vec![0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab];
+        assert_eq!(result, expected_result);
+        let result_tr = memory.read_transaction_ids(0x0, 8);
+        assert_eq!(result_tr.len(), 8);
+        let expected_result_tr = vec![
+            NonZeroU32::new(0),
+            NonZeroU32::new(0),
+            NonZeroU32::new(0),
+            NonZeroU32::new(0),
+            NonZeroU32::new(0),
+            NonZeroU32::new(0),
+            NonZeroU32::new(0),
             NonZeroU32::new(0),
         ];
         assert_eq!(result_tr, expected_result_tr);
