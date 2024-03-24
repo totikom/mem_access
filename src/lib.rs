@@ -1,5 +1,3 @@
-use std::num::NonZeroU32;
-
 mod internal_memory_ops;
 pub use internal_memory_ops::PagedMemory;
 use internal_memory_ops::Transaction;
@@ -7,17 +5,21 @@ use internal_memory_ops::Transaction;
 #[cfg(feature = "naive")]
 pub use internal_memory_ops::NaiveMemory;
 
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Copy)]
+#[repr(transparent)]
+pub struct TransactionId(u32);
+
 pub trait Memory: internal_memory_ops::InternalMemoryOps {
     fn read(&self, addr: usize, size: usize) -> Vec<u8>;
-    fn read_transaction_ids(&self, addr: usize, size: usize) -> Vec<Option<NonZeroU32>>;
+    fn read_transaction_ids(&self, addr: usize, size: usize) -> Vec<TransactionId>;
     fn current_transaction_id(&self) -> usize;
 
-    fn next_transaction(&mut self) -> Option<()> {
+    fn next_transaction(&mut self) -> Result<(), ()> {
         let current_idx = self.current_transaction_id();
         let Some(original_transaction) = self.get_mut_transaction(current_idx) else {
-            return None;
+            return Err(());
         };
-        let transaction_idx = NonZeroU32::new((current_idx + 1) as u32);
+        let transaction_idx = TransactionId((current_idx + 1) as u32);
         let transaction = std::mem::take(original_transaction);
         self.write_data(transaction.addr, &transaction.data);
         self.write_transaction_ids(
@@ -27,16 +29,16 @@ pub trait Memory: internal_memory_ops::InternalMemoryOps {
         let original_transaction = self.get_mut_transaction(current_idx).unwrap();
         let _ = std::mem::replace(original_transaction, transaction);
         self.set_transaction_idx(current_idx + 1);
-        Some(())
+        Ok(())
     }
 
-    fn previous_transaction(&mut self) -> Option<()> {
+    fn previous_transaction(&mut self) -> Result<(), ()> {
         let current_idx = self.current_transaction_id();
         if current_idx == 0 {
-            return None;
+            return Err(());
         }
         let Some(original_transaction) = self.get_mut_transaction(current_idx - 1) else {
-            return None;
+            return Err(());
         };
         let transaction = std::mem::take(original_transaction);
         self.write_data(transaction.addr, &transaction.old_data);
@@ -44,7 +46,7 @@ pub trait Memory: internal_memory_ops::InternalMemoryOps {
         let original_transaction = self.get_mut_transaction(current_idx - 1).unwrap();
         let _ = std::mem::replace(original_transaction, transaction);
         self.set_transaction_idx(current_idx - 1);
-        Some(())
+        Ok(())
     }
 
     fn add_transaction(
@@ -54,6 +56,9 @@ pub trait Memory: internal_memory_ops::InternalMemoryOps {
         code_location: usize,
     ) -> Result<(), ()> {
         if self.transaction_vec_len() != self.current_transaction_id() {
+            return Err(());
+        }
+        if addr + data.len() >= self.address_space_size() {
             return Err(());
         }
         let old_data = self.read(addr, data.len());
@@ -67,12 +72,35 @@ pub trait Memory: internal_memory_ops::InternalMemoryOps {
         };
         self.transaction_vec_push(transaction);
         let result = self.next_transaction();
-        debug_assert!(result.is_some());
+        debug_assert!(result.is_ok());
         Ok(())
+    }
+
+    fn move_to_transaction(&mut self, idx: TransactionId) -> Result<(), ()> {
+        let id = idx.0 as usize;
+        if id >= self.transaction_vec_len() {
+            Err(())
+        } else if id == self.current_transaction_id() {
+            Ok(())
+        } else if id < self.current_transaction_id() {
+            while id < self.current_transaction_id() {
+                let result = self.previous_transaction();
+                debug_assert!(result.is_ok());
+            }
+            Ok(())
+        } else if id > self.current_transaction_id() {
+            while id > self.current_transaction_id() {
+                let result = self.next_transaction();
+                debug_assert!(result.is_ok());
+            }
+            Ok(())
+        } else {
+            unreachable!();
+        }
     }
 }
 
-#[cfg(all(feature = "naive",test))]
+#[cfg(all(feature = "naive", test))]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
@@ -92,14 +120,14 @@ mod tests {
         let result_tr = memory.read_transaction_ids(0x0, 8);
         assert_eq!(result_tr.len(), 8);
         let expected_result_tr = vec![
-            NonZeroU32::new(0),
-            NonZeroU32::new(1),
-            NonZeroU32::new(1),
-            NonZeroU32::new(2),
-            NonZeroU32::new(2),
-            NonZeroU32::new(2),
-            NonZeroU32::new(2),
-            NonZeroU32::new(0),
+            TransactionId(0),
+            TransactionId(1),
+            TransactionId(1),
+            TransactionId(2),
+            TransactionId(2),
+            TransactionId(2),
+            TransactionId(2),
+            TransactionId(0),
         ];
         assert_eq!(result_tr, expected_result_tr);
     }
@@ -114,7 +142,7 @@ mod tests {
         let data2 = vec![4, 3, 2, 1];
         memory.add_transaction(0x3, data2.clone(), 0x0).unwrap();
 
-        assert!(memory.previous_transaction().is_some());
+        assert!(memory.previous_transaction().is_ok());
 
         let result = memory.read(0x0, 8);
         let expected_result = vec![0xab, 0, 1, 2, 3, 4, 0xab, 0xab];
@@ -122,18 +150,18 @@ mod tests {
         let result_tr = memory.read_transaction_ids(0x0, 8);
         assert_eq!(result_tr.len(), 8);
         let expected_result_tr = vec![
-            NonZeroU32::new(0),
-            NonZeroU32::new(1),
-            NonZeroU32::new(1),
-            NonZeroU32::new(1),
-            NonZeroU32::new(1),
-            NonZeroU32::new(1),
-            NonZeroU32::new(0),
-            NonZeroU32::new(0),
+            TransactionId(0),
+            TransactionId(1),
+            TransactionId(1),
+            TransactionId(1),
+            TransactionId(1),
+            TransactionId(1),
+            TransactionId(0),
+            TransactionId(0),
         ];
         assert_eq!(result_tr, expected_result_tr);
 
-        assert!(memory.previous_transaction().is_some());
+        assert!(memory.previous_transaction().is_ok());
 
         let result = memory.read(0x0, 8);
         let expected_result = vec![0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab];
@@ -141,14 +169,14 @@ mod tests {
         let result_tr = memory.read_transaction_ids(0x0, 8);
         assert_eq!(result_tr.len(), 8);
         let expected_result_tr = vec![
-            NonZeroU32::new(0),
-            NonZeroU32::new(0),
-            NonZeroU32::new(0),
-            NonZeroU32::new(0),
-            NonZeroU32::new(0),
-            NonZeroU32::new(0),
-            NonZeroU32::new(0),
-            NonZeroU32::new(0),
+            TransactionId(0),
+            TransactionId(0),
+            TransactionId(0),
+            TransactionId(0),
+            TransactionId(0),
+            TransactionId(0),
+            TransactionId(0),
+            TransactionId(0),
         ];
         assert_eq!(result_tr, expected_result_tr);
     }

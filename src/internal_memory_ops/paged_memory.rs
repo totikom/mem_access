@@ -1,19 +1,18 @@
-use std::num::NonZeroU32;
-
 use super::InternalMemoryOps;
 use super::Transaction;
 use crate::Memory;
+use crate::TransactionId;
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 struct Page<const SIZE: usize> {
     data: [u8; SIZE],
-    transaction_ids: [Option<NonZeroU32>; SIZE],
+    transaction_ids: [TransactionId; SIZE],
 }
 impl<const SIZE: usize> Page<SIZE> {
     pub fn new(default_value: u8) -> Self {
         Self {
             data: [default_value; SIZE],
-            transaction_ids: std::array::from_fn(|_| None),
+            transaction_ids: [TransactionId(0); SIZE],
         }
     }
 }
@@ -61,11 +60,11 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> PagedMemory<NUM_PAGES, PAGE
         idx: usize,
         in_page_start_addr: usize,
         in_page_end_addr: usize,
-    ) -> Vec<Option<NonZeroU32>> {
+    ) -> Vec<TransactionId> {
         if let Some(page_data) = self.memory[idx].as_ref().map(|page| &page.transaction_ids) {
             page_data[in_page_start_addr..=in_page_end_addr].to_vec()
         } else {
-            vec![NonZeroU32::new(0); in_page_end_addr + 1 - in_page_start_addr]
+            vec![TransactionId(0); in_page_end_addr + 1 - in_page_start_addr]
         }
     }
 
@@ -89,7 +88,7 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> PagedMemory<NUM_PAGES, PAGE
         &mut self,
         idx: usize,
         in_page_start_addr: usize,
-        transaction_ids: &[Option<NonZeroU32>],
+        transaction_ids: &[TransactionId],
     ) {
         if let Some(page_transaction_ids) = self.memory[idx]
             .as_mut()
@@ -136,7 +135,7 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> InternalMemoryOps
         }
     }
 
-    fn write_transaction_ids(&mut self, addr: usize, transaction_ids: &[Option<NonZeroU32>]) {
+    fn write_transaction_ids(&mut self, addr: usize, transaction_ids: &[TransactionId]) {
         let size = transaction_ids.len();
         assert!(size > 0);
         let in_page_addr_mask = (1 << (PAGE_SIZE.ilog2())) - 1;
@@ -184,11 +183,16 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> InternalMemoryOps
     fn set_transaction_idx(&mut self, idx: usize) {
         self.transaction_idx = idx;
     }
+
+    fn address_space_size(&self) -> usize {
+        NUM_PAGES * PAGE_SIZE
+    }
 }
 
 impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory for PagedMemory<NUM_PAGES, PAGE_SIZE> {
     fn read(&self, addr: usize, size: usize) -> Vec<u8> {
         assert!(size > 0);
+        assert!(addr + size < PAGE_SIZE * NUM_PAGES);
         let in_page_addr_mask = (1 << (PAGE_SIZE.ilog2())) - 1;
         let page_addr_shift = PAGE_SIZE.ilog2();
 
@@ -212,7 +216,7 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> Memory for PagedMemory<NUM_
         data
     }
 
-    fn read_transaction_ids(&self, addr: usize, size: usize) -> Vec<Option<NonZeroU32>> {
+    fn read_transaction_ids(&self, addr: usize, size: usize) -> Vec<TransactionId> {
         assert!(size > 0);
         let in_page_addr_mask = (1 << (PAGE_SIZE.ilog2())) - 1;
         let page_addr_shift = PAGE_SIZE.ilog2();
@@ -269,7 +273,7 @@ mod tests {
                 data[idx] = counter;
                 counter += 1;
             }
-            let transaction_ids = [NonZeroU32::new(1); PAGE_SIZE];
+            let transaction_ids = [TransactionId(1); PAGE_SIZE];
             let page = Box::new(Page {
                 data,
                 transaction_ids,
@@ -282,7 +286,7 @@ mod tests {
                 data[idx] = counter;
                 counter += 1;
             }
-            let transaction_ids = [NonZeroU32::new(1); PAGE_SIZE];
+            let transaction_ids = [TransactionId(1); PAGE_SIZE];
             let page = Box::new(Page {
                 data,
                 transaction_ids,
@@ -374,31 +378,34 @@ mod tests {
     fn write_ids_in_page() {
         let mut memory = PagedMemory::<4, 4>::new(0xab);
         let transaction_ids = memory.read_transaction_ids(0x0, 3);
-        assert_eq!(transaction_ids, vec![None, None, None]);
+        assert_eq!(
+            transaction_ids,
+            vec![TransactionId(0), TransactionId(0), TransactionId(0)]
+        );
 
-        let expected_ids = vec![NonZeroU32::new(0), NonZeroU32::new(1), NonZeroU32::new(2)];
+        let expected_ids = vec![TransactionId(0), TransactionId(1), TransactionId(2)];
         memory.write_data(0x0, &vec![0, 1, 2]);
         memory.write_transaction_ids(0x0, &expected_ids);
         let transaction_ids = memory.read_transaction_ids(0x0, 3);
         assert_eq!(transaction_ids, expected_ids);
 
         let expected_ids = vec![
-            NonZeroU32::new(0),
-            NonZeroU32::new(1),
-            NonZeroU32::new(2),
-            NonZeroU32::new(0),
+            TransactionId(0),
+            TransactionId(1),
+            TransactionId(2),
+            TransactionId(0),
         ];
         let transaction_ids = memory.read_transaction_ids(0x0, 4);
         assert_eq!(transaction_ids, expected_ids);
 
-        let expected_ids = vec![NonZeroU32::new(0), NonZeroU32::new(1), NonZeroU32::new(2)];
+        let expected_ids = vec![TransactionId(0), TransactionId(1), TransactionId(2)];
         memory.write_transaction_ids(0x1, &expected_ids);
 
         let expected_ids = vec![
-            NonZeroU32::new(0),
-            NonZeroU32::new(0),
-            NonZeroU32::new(1),
-            NonZeroU32::new(2),
+            TransactionId(0),
+            TransactionId(0),
+            TransactionId(1),
+            TransactionId(2),
         ];
         let transaction_ids = memory.read_transaction_ids(0x0, 4);
         assert_eq!(transaction_ids, expected_ids);
@@ -408,42 +415,42 @@ mod tests {
     fn write_ids_several_pages() {
         let mut memory = PagedMemory::<4, 4>::new(0xab);
         memory.write_data(0x2, &vec![0, 1, 2]);
-        memory.write_transaction_ids(0x2, &vec![NonZeroU32::new(1); 3]);
+        memory.write_transaction_ids(0x2, &vec![TransactionId(1); 3]);
 
         let data = memory.read_transaction_ids(0x0, 8);
         assert_eq!(
             data,
             vec![
-                NonZeroU32::new(0),
-                NonZeroU32::new(0),
-                NonZeroU32::new(1),
-                NonZeroU32::new(1),
-                NonZeroU32::new(1),
-                NonZeroU32::new(0),
-                NonZeroU32::new(0),
-                NonZeroU32::new(0)
+                TransactionId(0),
+                TransactionId(0),
+                TransactionId(1),
+                TransactionId(1),
+                TransactionId(1),
+                TransactionId(0),
+                TransactionId(0),
+                TransactionId(0)
             ]
         );
 
         memory.write_data(0x3, &vec![0, 1, 2, 3, 4, 5, 6, 7]);
-        memory.write_transaction_ids(0x3, &vec![NonZeroU32::new(2); 8]);
+        memory.write_transaction_ids(0x3, &vec![TransactionId(2); 8]);
 
         let data = memory.read_transaction_ids(0x0, 12);
         assert_eq!(
             data,
             vec![
-                NonZeroU32::new(0),
-                NonZeroU32::new(0),
-                NonZeroU32::new(1),
-                NonZeroU32::new(2),
-                NonZeroU32::new(2),
-                NonZeroU32::new(2),
-                NonZeroU32::new(2),
-                NonZeroU32::new(2),
-                NonZeroU32::new(2),
-                NonZeroU32::new(2),
-                NonZeroU32::new(2),
-                NonZeroU32::new(0)
+                TransactionId(0),
+                TransactionId(0),
+                TransactionId(1),
+                TransactionId(2),
+                TransactionId(2),
+                TransactionId(2),
+                TransactionId(2),
+                TransactionId(2),
+                TransactionId(2),
+                TransactionId(2),
+                TransactionId(2),
+                TransactionId(0)
             ]
         );
     }

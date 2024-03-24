@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use crate::TransactionId;
 
 use super::InternalMemoryOps;
 use super::Transaction;
@@ -8,7 +8,7 @@ use crate::Memory;
 pub struct NaiveMemory<const NUM_PAGES: usize, const PAGE_SIZE: usize, const SIZE: usize> {
     default_value: u8,
     data: Box<[u8; SIZE]>,
-    transaction_ids: Box<[Option<NonZeroU32>; SIZE]>,
+    transaction_ids: Box<[TransactionId; SIZE]>,
     transactions: Vec<Transaction>,
     transaction_idx: usize,
 }
@@ -27,7 +27,7 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize, const SIZE: usize>
         Self {
             default_value,
             data: Box::new([default_value; SIZE]),
-            transaction_ids: Box::new(std::array::from_fn(|_| None)),
+            transaction_ids: Box::new([TransactionId(0); SIZE]),
             transaction_idx: 0,
             transactions: Vec::new(),
         }
@@ -43,7 +43,7 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize, const SIZE: usize> Internal
         }
     }
 
-    fn write_transaction_ids(&mut self, addr: usize, transaction_ids: &[Option<NonZeroU32>]) {
+    fn write_transaction_ids(&mut self, addr: usize, transaction_ids: &[TransactionId]) {
         for (id_cell, value) in self.transaction_ids[addr..]
             .iter_mut()
             .zip(transaction_ids.iter())
@@ -63,6 +63,9 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize, const SIZE: usize> Internal
     fn set_transaction_idx(&mut self, idx: usize) {
         self.transaction_idx = idx;
     }
+    fn address_space_size(&self) -> usize {
+        SIZE
+    }
 }
 
 impl<const NUM_PAGES: usize, const PAGE_SIZE: usize, const SIZE: usize> Memory
@@ -70,10 +73,11 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize, const SIZE: usize> Memory
 {
     fn read(&self, addr: usize, size: usize) -> Vec<u8> {
         assert!(size > 0);
+        assert!(addr + size < SIZE);
         self.data[addr..addr + size].to_vec()
     }
 
-    fn read_transaction_ids(&self, addr: usize, size: usize) -> Vec<Option<NonZeroU32>> {
+    fn read_transaction_ids(&self, addr: usize, size: usize) -> Vec<TransactionId> {
         assert!(size > 0);
         self.transaction_ids[addr..addr + size].to_vec()
     }
