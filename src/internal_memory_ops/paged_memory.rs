@@ -41,6 +41,7 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> PagedMemory<NUM_PAGES, PAGE
         }
     }
 
+    #[inline(always)]
     fn read_page_data(
         &self,
         idx: usize,
@@ -54,6 +55,7 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> PagedMemory<NUM_PAGES, PAGE
         }
     }
 
+    #[inline(always)]
     fn read_page_transaction_ids(
         &self,
         idx: usize,
@@ -67,6 +69,7 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> PagedMemory<NUM_PAGES, PAGE
         }
     }
 
+    #[inline(always)]
     fn write_page_data(&mut self, idx: usize, in_page_start_addr: usize, data: &[u8]) {
         if let Some(page_data) = self.memory[idx].as_mut().map(|page| &mut page.data) {
             for (index, value) in data.iter().enumerate() {
@@ -81,6 +84,7 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> PagedMemory<NUM_PAGES, PAGE
         }
     }
 
+    #[inline(always)]
     fn write_page_transaction_ids(
         &mut self,
         idx: usize,
@@ -168,12 +172,15 @@ impl<const NUM_PAGES: usize, const PAGE_SIZE: usize> InternalMemoryOps
     fn transaction_vec_len(&self) -> usize {
         self.transactions.len()
     }
+
     fn transaction_vec_push(&mut self, transaction: Transaction) {
         self.transactions.push(transaction);
     }
+
     fn get_mut_transaction(&mut self, idx: usize) -> Option<&mut Transaction> {
         self.transactions.get_mut(idx)
     }
+
     fn set_transaction_idx(&mut self, idx: usize) {
         self.transaction_idx = idx;
     }
